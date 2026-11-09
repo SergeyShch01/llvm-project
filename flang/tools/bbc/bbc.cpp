@@ -150,8 +150,9 @@ static llvm::cl::opt<bool> enableOpenMP("fopenmp",
 
 static llvm::cl::opt<bool> disableOpenMPMainProgramGlobals(
     "fno-openmp-main-program-globals",
-    llvm::cl::desc("Disable static storage selection for small main program "
-                   "scalars used by explicit host OpenMP PARALLEL regions"),
+    llvm::cl::desc(
+        "Disable promotion to static storage for small main-program "
+        "scalars referenced directly in explicit host OpenMP PARALLEL regions"),
     llvm::cl::init(false));
 
 static llvm::cl::opt<bool>
@@ -505,13 +506,10 @@ static llvm::LogicalResult convertFortranSourceToMLIR(
     return mlir::success();
   }
 
-  // Generated device targets require the same capture layout on host and
-  // device.
   Fortran::lower::LoweringOptions loweringOptions{};
-  loweringOptions.setOpenMPMainProgramGlobals(
-      !disableOpenMPMainProgramGlobals &&
-      enableDoConcurrentToOpenMPConversion.getValue() != "device");
   if (pftDumpTest) {
+    // PFT dumps do not use variable storage choices.
+    loweringOptions.setOpenMPMainProgramGlobals(false);
     if (auto ast = Fortran::lower::createPFT(parseTree, semanticsContext,
                                              loweringOptions)) {
       Fortran::lower::dumpPFT(llvm::outs(), *ast);
@@ -520,6 +518,10 @@ static llvm::LogicalResult convertFortranSourceToMLIR(
     llvm::errs() << "Pre FIR Tree is NULL.\n";
     return mlir::failure();
   }
+
+  loweringOptions.setOpenMPMainProgramGlobals(!disableOpenMPMainProgramGlobals);
+  loweringOptions.setDeviceDoConcurrent(
+      enableDoConcurrentToOpenMPConversion.getValue() == "device");
 
   // translate to FIR dialect of MLIR
   mlir::DialectRegistry registry;

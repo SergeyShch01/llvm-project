@@ -24,7 +24,6 @@
 #include "flang/Semantics/tools.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
-#include "llvm/Support/Debug.h"
 #include <algorithm>
 #include <optional>
 
@@ -544,31 +543,30 @@ static mlir::Value genTupleCoor(fir::FirOpBuilder &builder, mlir::Location loc,
 
 void Fortran::lower::HostAssociations::addSymbolsToBind(
     const llvm::SetVector<const Fortran::semantics::Symbol *> &symbols,
-    const Fortran::semantics::Scope &hostScope,
-    llvm::function_ref<llvm::ArrayRef<pft::Variable>()> getVariables) {
+    const Fortran::semantics::Scope &hostScope, pft::Program &program) {
   assert(tupleSymbols.empty() && globalSymbols.empty() &&
          "must be initially empty");
   this->hostScope = &hostScope;
-  bool hasNewGlobals = false;
+  bool capturesMainGlobal = false;
   for (const auto *s : symbols)
     // GlobalOp are created for non-global threadprivate variable,
     //  so considering them as globals.
-    if (Fortran::lower::symbolIsGlobal(*s) ||
+    if (Fortran::lower::symbolIsGlobal(*s, program) ||
         (*s).test(Fortran::semantics::Symbol::Flag::OmpThreadprivate)) {
       // The ultimate symbol is stored here so that global symbols from the
       // host scope can later be searched in this set.
       const auto &ultimate = s->GetUltimate();
       globalSymbols.insert(&ultimate);
-      hasNewGlobals |= ultimate.test(semantics::Symbol::Flag::OmpMainGlobal);
+      capturesMainGlobal = capturesMainGlobal || program.isMainGlobal(ultimate);
     } else {
       tupleSymbols.insert(s);
     }
-  if (hasNewGlobals) {
-    variables = getVariables();
+  if (capturesMainGlobal) {
+    variables = program.getScopeVariableList(hostScope);
     // Aggregate stores precede their aliases. Select backwards so each chosen
     // alias requests its backing store using the already computed storage key.
-    // Resolve each USE/host association tail once, including rejected records.
-    // Direct objects require no cache lookup or allocation.
+    // Reuse shared parts of USE/host association chains, even for skipped
+    // records. Direct objects require no cache lookup or allocation.
     llvm::DenseMap<const semantics::Symbol *, const semantics::Symbol *> roots;
     auto root = [&](const semantics::Symbol &symbol) {
       const auto *original = &symbol;
@@ -587,7 +585,6 @@ void Fortran::lower::HostAssociations::addSymbolsToBind(
           break;
         }
         path.push_back(original);
-        LLVM_DEBUG(llvm::dbgs() << "main-global binding association\n");
         original = next;
       }
       for (const auto *entry : path)
@@ -660,7 +657,8 @@ void Fortran::lower::HostAssociations::internalProcedureBindings(
       for (const auto *variable : globalBindings)
         bind(*variable);
     } else {
-      for (const auto &variable : pft::getScopeVariableList(*hostScope))
+      for (const auto &variable :
+           pft::getScopeVariableList(*hostScope, converter.getPft()))
         if ((variable.isAggregateStore() && variable.isGlobal()) ||
             (variable.hasSymbol() &&
              globalSymbols.contains(&variable.getSymbol().GetUltimate())))

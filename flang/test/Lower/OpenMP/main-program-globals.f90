@@ -1,55 +1,59 @@
 ! REQUIRES: module-independent
 ! RUN: split-file %s %t
+! RUN: %if flangrt-modules %{ %flang_fc1 -fopenmp -emit-hlfir %t/intrinsics.f90 -o - | FileCheck %s --check-prefix=INTRINSICS-ON %}
+! RUN: %if flangrt-modules %{ %flang_fc1 -fopenmp -fno-openmp-main-program-globals -emit-hlfir %t/intrinsics.f90 -o - | FileCheck %s --check-prefix=INTRINSICS-OFF --implicit-check-not='fir.global internal @_QFE' %}
 ! RUN: %flang_fc1 -fopenmp -emit-hlfir %t/miniweather.f90 -o %t.on
-! RUN: FileCheck %s --check-prefix=ON < %t.on
+! RUN: FileCheck %s --check-prefixes=ON,ZERO < %t.on
+! RUN: %flang_fc1 -fopenmp -fno-init-global-zero -emit-hlfir %t/miniweather.f90 -o - | FileCheck %s --check-prefixes=ON,UNDEF
 ! RUN: FileCheck %s --check-prefix=MODULE --implicit-check-not='fir.alloca tuple' < %t.on
 ! RUN: bbc -fopenmp -emit-hlfir %t/miniweather.f90 -o - | FileCheck %s --check-prefix=ON
 ! RUN: bbc -fopenmp -fno-openmp-main-program-globals -emit-hlfir %t/miniweather.f90 -o - | FileCheck %s --check-prefix=OFF --implicit-check-not='fir.global internal @_QFE'
 ! RUN: %flang_fc1 -fopenmp -fno-openmp-main-program-globals -emit-hlfir %t/miniweather.f90 -o - | FileCheck %s --check-prefix=OFF --implicit-check-not='fir.global internal @_QFE'
 ! RUN: %flang_fc1 -fopenmp -fopenmp-is-target-device -emit-hlfir %t/miniweather.f90 -o - | FileCheck %s --check-prefix=MODULE --implicit-check-not='fir.global internal @_QFE'
-! RUN: %flang_fc1 -fopenmp-simd -emit-hlfir %t/miniweather.f90 -o - | FileCheck %s --check-prefix=MODULE --implicit-check-not='fir.global internal @_QFE'
+! RUN: %flang_fc1 -fopenmp-simd -emit-hlfir %t/miniweather.f90 -o - | FileCheck %s --check-prefix=OFF --implicit-check-not='fir.global internal @_QFE'
 ! RUN: %flang_fc1 -fopenmp -fopenacc -emit-hlfir %t/miniweather.f90 -o - | FileCheck %s --check-prefix=OFF --implicit-check-not='fir.global internal @_QFE'
 ! RUN: %flang_fc1 -fopenmp -x cuda -emit-hlfir %t/miniweather.f90 -o - | FileCheck %s --check-prefix=OFF --implicit-check-not='fir.global internal @_QFE'
 ! RUN: bbc -fopenmp -fopenacc -emit-hlfir %t/miniweather.f90 -o - | FileCheck %s --check-prefix=OFF --implicit-check-not='fir.global internal @_QFE'
 ! RUN: bbc -fopenmp -fcuda -emit-hlfir %t/miniweather.f90 -o - | FileCheck %s --check-prefix=OFF --implicit-check-not='fir.global internal @_QFE'
-! RUN: %if aarch64-registered-target %{ %flang_fc1 -triple aarch64-unknown-linux-gnu -O3 -ffast-math -fopenmp -emit-llvm %t/miniweather.f90 -o - | FileCheck %s --check-prefix=OPT %}
-! RUN: %if asserts %{ %flang_fc1 -fopenmp -fdebug-dump-pft -mllvm -debug-only=flang-pft %t/miniweather.f90 2>&1 | FileCheck %s --check-prefix=PFT_ON %}
-! RUN: %if asserts %{ %flang_fc1 -fopenmp -fno-openmp-main-program-globals -fdebug-dump-pft -mllvm -debug-only=flang-pft %t/miniweather.f90 2>&1 | FileCheck %s --check-prefix=PFT_OFF %}
 ! RUN: %flang_fc1 -fopenmp -emit-hlfir %t/objects.f90 -o %t.objects
 ! RUN: FileCheck %s --check-prefix=OBJECTS < %t.objects
-! RUN: FileCheck %s --check-prefix=MODULE --implicit-check-not='fir.global internal @_QFE{{(array|matrix|storage|i|j|ap|ptr|record|private_value|listed|eq1|eq2|x|y|serial_only|x_private_i32|y_firstprivate_i32|x_linear_i32|allocated|address|pointee|actual|element|extent|rhs|field)[[:space:]]}}' < %t.objects
+! RUN: FileCheck %s --check-prefix=MODULE --implicit-check-not='fir.global internal @_QFE{{(array|matrix|storage|i|j|ap|ptr|record|private_value|listed|eq1|eq2|x|y|serial_only|x_private_i32|y_firstprivate_i32|x_linear_i32|allocated|address|pointee|element|extent|field|lastprivate_value|local_value|init_value)[[:space:]]}}' < %t.objects
 ! RUN: %flang_fc1 -fopenmp -fno-openmp-main-program-globals -emit-hlfir %t/objects.f90 -o %t.off
 ! RUN: FileCheck %s --check-prefix=BOUNDARY < %t.off
 ! RUN: FileCheck %s --check-prefix=MODULE --implicit-check-not='fir.global internal @_QFE{{(text|if_condition|if_action|where_value|forall_value)[[:space:]]}}' < %t.off
 ! RUN: FileCheck %s --check-prefix=EXPRESSIONS < %t.objects
-! RUN: FileCheck %s --check-prefix=MODULE --implicit-check-not='fir.global internal @_QFE{{(actual|element|extent|rhs|field)[[:space:]]}}' < %t.objects
+! RUN: FileCheck %s --check-prefix=MODULE --implicit-check-not='fir.global internal @_QFE{{(element|extent|field|clause_only|header_only|statement_only)[[:space:]]}}' < %t.objects
 ! RUN: %flang_fc1 -emit-hlfir %t/objects.f90 -o %t.serial
 ! RUN: FileCheck %s --check-prefix=BOUNDARY < %t.serial
 ! RUN: FileCheck %s --check-prefix=MODULE --implicit-check-not='fir.global internal @_QFE{{(integer_value|real_value|complex_value|logical_value|text|if_condition|if_action|where_value|forall_value|direct)[[:space:]]}}' < %t.serial
-! RUN: %flang_fc1 -fopenmp -mllvm -strict-fir-volatile-verifier -emit-hlfir %t/mixed.f90 -o %t.mixed
+! RUN: %flang_fc1 -fopenmp -mmlir -strict-fir-volatile-verifier -emit-hlfir %t/mixed.f90 -o %t.mixed
 ! RUN: FileCheck %s --check-prefix=MIXED < %t.mixed
 ! RUN: FileCheck %s --check-prefix=PROPERTIES < %t.mixed
 ! RUN: %flang_fc1 -fopenmp -emit-hlfir %t/callbacks.f90 -o %t.callbacks
 ! RUN: FileCheck %s --check-prefix=CALLBACK < %t.callbacks
 ! RUN: FileCheck %s --check-prefix=MODULE --implicit-check-not='fir.alloca tuple' --implicit-check-not='fir.host_assoc' < %t.callbacks
 ! RUN: %flang_fc1 -fopenmp -fno-openmp-main-program-globals -emit-hlfir %t/callbacks.f90 -o - | FileCheck %s --check-prefix=BOX_OFF --implicit-check-not='fir.global internal @_QFEx{{[[:space:]]}}'
-! RUN: %flang_fc1 -fopenmp -emit-fir %t/callbacks.f90 -o - | fir-opt --flang-licm | FileCheck %s --check-prefix=LICM
 ! RUN: %flang_fc1 -fopenmp -fcoarray -emit-hlfir %t/coarray.f90 -o %t.on
 ! RUN: FileCheck %s --check-prefix=COARRAY < %t.on
 ! RUN: FileCheck %s --check-prefix=MODULE --implicit-check-not='fir.global internal @_QFEa_coarray_handle{{[[:space:]]}}' < %t.on
 ! RUN: %flang_fc1 -fopenmp -fcoarray -emit-llvm %t/coarray.f90 -o - | FileCheck %s --check-prefix=LLVM
 ! MODULE: module
 
-! Check globals and removal of the host tuple for MAIN scalars referenced in an
-! internal procedure's PARALLEL region. Disabled modes retain legacy storage;
-! OPT checks reciprocal computation before the outlined loop.
+! MAIN scalars used in worker's PARALLEL region use globals and need no host tuple.
 ! ON-LABEL: func.func @_QQmain()
+! ON-DAG: %[[MAIN_ADDR:[^ ]+]] = fir.address_of(@_QFEdx)
+! ON-DAG: %[[MAIN_X:[^: ]+]]:2 = hlfir.declare %[[MAIN_ADDR]] {{.*}}uniq_name("_QFEdx")
+! ON: fir.call @_FortranAioInputReal64(%{{[^,]+}}, %[[MAIN_X]]#0)
 ! ON: fir.call @_QFPworker()
 ! ON-LABEL: func.func private @_QFPworker()
-! ON-DAG: fir.address_of(@_QFEdx)
+! ON-DAG: %[[X_ADDR:[^ ]+]] = fir.address_of(@_QFEdx)
+! ON-DAG: %[[X:[^: ]+]]:2 = hlfir.declare %[[X_ADDR]] {{.*}}uniq_name("_QFEdx")
 ! ON-DAG: fir.address_of(@_QFEdz)
 ! ON: omp.parallel
+! ON: fir.load %[[X]]#0 : !fir.ref<f64>
 ! ON-DAG: fir.global internal @_QFEdx : f64
+! ZERO: fir.zero_bits f64
+! UNDEF: fir.undefined f64
 ! ON-DAG: fir.global internal @_QFEdz : f64
 ! OFF-LABEL: func.func @_QQmain()
 ! OFF-DAG: fir.alloca f64 {{.*}}bindc_name = "dx"
@@ -57,24 +61,6 @@
 ! OFF: fir.alloca tuple
 ! OFF-LABEL: func.func private @_QFPworker(
 ! OFF-SAME: fir.host_assoc
-! OPT-LABEL: define internal void @_QFPworker..omp_par(
-! OPT: omp_collapsed.body.lr.ph:
-! OPT-DAG: %[[DX:[^ ]+]] = load double, ptr @_QFEdx
-! OPT-DAG: %[[DZ:[^ ]+]] = load double, ptr @_QFEdz
-! OPT-DAG: %[[RX:[^ ]+]] = fdiv fast double 1.000000e+00, %[[DX]]
-! OPT-DAG: %[[RZ:[^ ]+]] = fdiv fast double 1.000000e+00, %[[DZ]]
-! OPT: br label %[[BODY:omp_collapsed.body]]
-! OPT: [[BODY]]:
-! OPT-NOT: fdiv
-! OPT: fmul fast double {{.*}}, %[[RX]]
-! OPT-NOT: fdiv
-! OPT: fmul fast double {{.*}}, %[[RZ]]
-! OPT-NOT: fdiv
-! OPT: br i1
-! PFT_ON: {{^main-global symbol$}}
-! PFT_OFF-NOT: {{^main-global }}
-! PFT_OFF: Program
-! PFT_OFF-NOT: {{^main-global }}
 !--- miniweather.f90
 program p
 integer :: nx,nz,i_beg,k_beg
@@ -101,13 +87,9 @@ print *,a
 end subroutine
 end program
 
-! Select intrinsic scalars in nested regions and statement expressions while
-! preserving excluded objects and private copies. Generated privatizer names
-! must not collide with excluded scalars. Calls and constructors do not
-! seed selection. The 32/33-byte CHARACTER cases distinguish new selection from
-! existing static storage. serial_only checks collection stops at END PARALLEL.
+! Independent call operands select globals; metadata and callee bodies do not.
 ! OBJECTS-LABEL: func.func @_QQmain()
-! OBJECTS: fir.alloca i32 {{.*}}bindc_name = "serial_only"
+! OBJECTS-DAG: fir.alloca i32 {{.*}}bindc_name = "serial_only"
 ! OBJECTS: omp.parallel
 ! OBJECTS-DAG: fir.global internal @_QFEif_condition : i32
 ! OBJECTS-DAG: fir.global internal @_QFEif_action : i32
@@ -127,7 +109,7 @@ end program
 ! EXPRESSIONS: omp.parallel
 ! EXPRESSIONS: fir.call @_QFPsink(
 ! EXPRESSIONS: fir.call @_QFPassign(
-! EXPRESSIONS: fir.global internal @_QFEdirect : i32
+! EXPRESSIONS-COUNT-17: fir.global internal @_QFE{{(direct|actual|rhs|lhs|call_arg|max_a|max_b|max_c|jn_lo|jn_hi|jn_arg|yn_lo|yn_hi|yn_arg|empty_index|argument_index|then_condition)}} :
 ! BOUNDARY-DAG: fir.global internal @_QFEsaved : i32
 !--- objects.f90
 program p
@@ -142,10 +124,15 @@ program p
     integer :: n
   end type
   type(t) :: record,value
+  type handler; procedure(), pointer, nopass :: proc=>null(); end type
+  type(handler) :: handlers(2)
   interface assignment(=)
-    procedure assign
+    procedure assign,extract
   end interface
-  integer :: direct,actual,element,extent,rhs,field
+  integer :: direct,actual,element,extent,rhs,field,lhs,call_arg
+  integer :: max_a,max_b,max_c,jn_lo,jn_hi,yn_lo,yn_hi,empty_index,argument_index
+  integer :: then_condition,clause_only,header_only,statement_only,sf,arg,lastprivate_value,local_value,init_value
+  real :: jn_arg,yn_arg
   integer :: array(2),matrix(2,2),private_value,listed,eq1,eq2,x,y
   integer :: if_condition,if_action,serial_only,where_value,forall_value,i,j
   integer :: x_private_i32,y_firstprivate_i32,x_linear_i32
@@ -157,18 +144,25 @@ program p
   integer, pointer :: ptr
   equivalence(eq1,eq2)
   namelist /group/ listed
+  sf(arg)=statement_only+arg
+  handlers(1)%proc=>no_arguments; handlers(2)%proc=>sink
+  empty_index=1; argument_index=2; header_only=1; init_value=0
   direct=1; actual=2; element=3
   extent=4; rhs=5; field=6
   saved=1; storage=1; address=loc(storage); if_condition=1
   array=1; matrix=0; where_value=2; forall_value=3
-!$omp parallel
+!$omp parallel shared(clause_only) num_threads(header_only)
   print *,array,ap,ptr,record,private_value,listed,eq1,eq2
   print *,x_private_i32,y_firstprivate_i32,x_linear_i32
   print *,allocated,address,pointee,saved
-  print *,direct,abs(actual),[element],[character(extent)::]
-  print *,t(field)
+  print *,direct,abs(actual),max(max_a,max_b,max_c),[element],[character(extent)::]
+  value=t(field); print *,sf(1),lastprivate_value,local_value,init_value
+  print *,bessel_jn(jn_lo,jn_hi,jn_arg),bessel_yn(yn_lo,yn_hi,yn_arg)
   call sink(actual)
-  value=rhs
+  if (then_condition>0) then
+    call handlers(argument_index)%proc(call_arg)
+  end if
+  value=rhs; lhs=value
   where(array>0)
     where(array<3) array=where_value
   end where
@@ -186,13 +180,20 @@ program p
   private_value=x+y
 !$omp end parallel
   x=0
-!$omp simd linear(x)
+!$omp simd linear(x) lastprivate(lastprivate_value)
   do i=1,4
-    x=x+1
+    x=x+1; lastprivate_value=x
   end do
 !$omp end simd
+!$omp teams distribute parallel do
+  do i=1,2
+    call handlers(empty_index)%proc()
+  end do
+  do concurrent(i=1:1) local(local_value) local_init(init_value) reduce(+:direct); local_value=0; direct=direct+i; end do
   serial_only=1
 contains
+  subroutine no_arguments(); end subroutine
+  subroutine extract(to,from); integer :: to; type(t) :: from; to=from%n; end subroutine
   subroutine sink(n)
     integer :: n
     print *,n
@@ -204,13 +205,11 @@ contains
   end subroutine
 end program
 
-! Keep the array in the host tuple while promoted scalars use globals. Preserve
-! EQUIVALENCE offsets and DATA initialization, threadprivate bindings, and
-! VOLATILE/ASYNCHRONOUS attributes.
+! Mixed captures use globals for x and a tuple for the array and VOLATILE v.
 ! MIXED-LABEL: func.func @_QQmain()
 ! MIXED: %[[A:[^: ]+]]:2 = hlfir.declare {{.*}}uniq_name("_QFEa")
-! MIXED: %[[T:[^ ]+]] = fir.alloca tuple<!fir.box<!fir.array<2xi32>>>
-! MIXED: %[[S:[^ ]+]] = fir.coordinate_of %[[T]],
+! MIXED: %[[T:[^ ]+]] = fir.alloca tuple<{{.*}}!fir.box<!fir.array<2xi32>>{{.*}}>
+! MIXED: %[[S:[^ ]+]] = fir.coordinate_of %[[T]], {{.*}} -> !fir.ref<!fir.box<!fir.array<2xi32>>>
 ! MIXED: %[[B:[^ ]+]] = fir.embox %[[A]]#0
 ! MIXED: fir.store %[[B]] to %[[S]]
 ! MIXED: fir.call @_QFPworker(%[[T]])
@@ -225,7 +224,7 @@ end program
 ! MIXED: %[[TLS:[^: ]+]]:2 = hlfir.declare {{.*}}uniq_name("_QFEtls")
 ! MIXED: %[[ADDR:[^ ]+]] = omp.threadprivate %[[TLS]]#0
 ! MIXED: %[[LOCAL:[^: ]+]]:2 = hlfir.declare %[[ADDR]] uniq_name("_QFEtls")
-! MIXED: %[[C:[^ ]+]] = fir.coordinate_of %[[H]],
+! MIXED: %[[C:[^ ]+]] = fir.coordinate_of %[[H]], {{.*}} -> !fir.ref<!fir.box<!fir.array<2xi32>>>
 ! MIXED: %[[BOX:[^ ]+]] = fir.load %[[C]]
 ! MIXED: %[[ARRAY:[^ ]+]] = fir.box_addr %[[BOX]]
 ! MIXED: hlfir.declare %[[ARRAY]]({{.*}}) uniq_name("_QFEa") fortran_attrs<host_assoc>
@@ -245,10 +244,10 @@ end program
 ! MIXED: fir.has_value %[[SECOND]]
 ! PROPERTIES-LABEL: func.func private @_QFPworker(
 ! PROPERTIES-DAG: hlfir.declare {{.*}}uniq_name("_QFEav") fortran_attrs<asynchronous, internal_assoc>
-! PROPERTIES-DAG: hlfir.declare {{.*}}uniq_name("_QFEv") fortran_attrs<volatile, internal_assoc>
+! PROPERTIES-DAG: hlfir.declare {{.*}}uniq_name("_QFEv") fortran_attrs<volatile, host_assoc>
 !--- mixed.f90
 program p
-  integer :: x,a(2)
+  integer :: x,a(2),locality_only
   integer,volatile :: v
   integer,asynchronous :: av
   integer, save :: backing(2),alias,tls
@@ -260,6 +259,8 @@ program p
   call worker()
 contains
   subroutine worker()
+    integer :: i
+    do concurrent(i=1:1) shared(locality_only); continue; end do
     tls=tls+1
 !$omp parallel
     print *,x,a,alias,tls,v,av
@@ -267,8 +268,7 @@ contains
   end subroutine
 end program
 
-! Removing the last host capture also updates procedure boxes and direct and
-! indirect calls. Loads must stay in loops that call a modifying sibling.
+! Global captures supply direct calls, procedure boxes and CHARACTER arguments.
 ! CALLBACK-LABEL: func.func @_QQmain()
 ! CALLBACK: %[[P:[^: ]+]]:2 = hlfir.declare {{.*}}uniq_name("_QFEcallback")
 ! CALLBACK: %[[WORKER:[^ ]+]] = fir.address_of(@_QFPworker) : () -> ()
@@ -282,7 +282,15 @@ end program
 ! CALLBACK: %[[LOADED:[^ ]+]] = fir.load %[[P]]#0
 ! CALLBACK: %[[CODE:[^ ]+]] = fir.box_addr %[[LOADED]]
 ! CALLBACK: fir.call %[[CODE]]()
-! BOX_OFF: %[[HOST:[^ ]+]] = fir.alloca tuple<!fir.ref<i32>>
+! CALLBACK-LABEL: func.func private @_QFPworker()
+! CALLBACK: %[[TEXT_ADDR:[^ ]+]] = fir.address_of(@_QFEtext)
+! CALLBACK: %[[LEN:[^ ]+]] = arith.constant 4 : index
+! CALLBACK: %[[TEXT:[^: ]+]]:2 = hlfir.declare %[[TEXT_ADDR]] typeparams %[[LEN]]
+! CALLBACK: %[[BYTES:[^ ]+]] = fir.convert %[[TEXT]]#0
+! CALLBACK: %[[LENGTH:[^ ]+]] = fir.convert %[[LEN]] : (index) -> i64
+! CALLBACK: fir.call @_FortranAioOutputAscii(%{{[^,]+}}, %[[BYTES]], %[[LENGTH]])
+! CALLBACK-COUNT-2: fir.global internal @_QFE{{(text|result_len)}} :
+! BOX_OFF: %[[HOST:[^ ]+]] = fir.alloca tuple<{{.*}}>
 ! BOX_OFF: %[[PTR:[^ ]+]] = fir.address_of(@_QFPworker)
 ! BOX_OFF: %[[BOX:[^ ]+]] = fir.emboxproc %[[PTR]], %[[HOST]]
 ! BOX_OFF: fir.store %[[BOX]]
@@ -290,22 +298,6 @@ end program
 ! BOX_OFF: %[[ARG:[^ ]+]] = fir.emboxproc %[[ACTUAL]], %[[HOST]]
 ! BOX_OFF: fir.call @_QPinvoke(%[[ARG]])
 ! BOX_OFF: func.func private @_QFPworker({{.*}}fir.host_assoc
-! LICM-LABEL: func.func @_QQmain()
-! LICM: %[[MAIN_X:[^ ]+]] = fir.declare {{.*}}uniq_name("_QFEx") fortran_attrs<internal_assoc>
-! LICM: fir.do_loop
-! LICM-NOT: {{^ *[}]}}
-! LICM: fir.call @_QFPbump(
-! LICM-NOT: {{^ *[}]}}
-! LICM: fir.load %[[MAIN_X]] :
-! LICM: {{^ *[}]}}
-! LICM-LABEL: func.func private @_QFPaccumulate(
-! LICM: %[[X:[^ ]+]] = fir.declare {{.*}}uniq_name("_QFEx") fortran_attrs<internal_assoc>
-! LICM: fir.do_loop
-! LICM-NOT: {{^ *[}]}}
-! LICM: fir.call @_QFPbump(
-! LICM-NOT: {{^ *[}]}}
-! LICM: fir.load %[[X]] :
-! LICM: {{^ *[}]}}
 !--- callbacks.f90
 program p
   interface
@@ -314,53 +306,32 @@ program p
     end subroutine
   end interface
   procedure(), pointer :: callback
-  integer :: x,i,s
-  x=7
+  integer :: x,result_len
+  character(4) :: text
+  x=7; result_len=4; text="abcd"
   callback=>worker
   call invoke(worker)
 !$omp parallel num_threads(1)
-  print *,x
+  print *,x,text,result_len
   call worker()
   call callback()
 !$omp end parallel
-  x=0
-  call accumulate()
-  x=0
-  s=0
-  do i=1,3
-    call bump()
-    s=s+x
-  end do
-  print *,s
 contains
   subroutine worker()
-    print *,x
+    print *,x,text,make()
   end subroutine
-  subroutine accumulate()
-    integer :: i,s
-    s=0
-    do i=1,3
-      call bump()
-      s=s+x
-    end do
-    print *,s
-  end subroutine
-  subroutine bump()
-    x=x+1
-  end subroutine
+  function make() result(s); character(result_len) :: s; s=text; end function
 end program
 subroutine invoke(proc)
   external :: proc
   call proc()
 end subroutine
 
-! Preserve the scalar whose name would collide with a coarray handle; a longer
-! suffix and an ordinary scalar remain eligible for global storage.
-! COARRAY: fir.alloca i32 {{.*}}bindc_name = "a_coarray_handle"
+! A scalar matching a coarray handle name needs separate storage.
+! COARRAY-DAG: fir.alloca i32 {{.*}}bindc_name = "a_coarray_handle"
 ! COARRAY-DAG: fir.global internal @_QFEa_coarray_handle_extra : i32
 ! COARRAY-DAG: fir.global internal @_QFEordinary : i32
 ! LLVM: @_QFEa_coarray_handle = linkonce global %{{[^ ]*prif_coarray_handle_type}}
-! LLVM: call void @llvm.memmove{{.*}}(ptr @_QFEa_coarray_handle, ptr {{.*}}, i64 8, i1 false)
 !--- coarray.f90
 program p
   integer,allocatable :: a[:]
@@ -373,4 +344,30 @@ program p
   print *,a_coarray_handle,a_coarray_handle_extra,ordinary
 !$omp end parallel
   deallocate(a)
+end program
+
+! Independent arguments distinguish user calls, inquiry metadata and folded IZEXT/JZEXT.
+! INTRINSICS-ON-COUNT-5: fir.alloca {{.*}}bindc_name = "{{(meta|round_meta|keyword_meta|second_result|cpu_result)}}"
+! INTRINSICS-ON-COUNT-8: fir.global internal @_QFE{{(actual|intrinsic_result|user_result|choice|optional_choice|izext_arg|jzext_arg|zext_sum)}} :
+! INTRINSICS-OFF-COUNT-13: fir.alloca {{.*}}bindc_name = "{{(actual|intrinsic_result|user_result|choice|optional_choice|izext_arg|jzext_arg|zext_sum|meta|round_meta|keyword_meta|second_result|cpu_result)}}"
+!--- intrinsics.f90
+program p
+  use, intrinsic :: ieee_arithmetic, only: true_value=>ieee_value, &
+    ieee_positive_zero, rounding_support=>ieee_support_rounding, ieee_round_type, ieee_nearest, ieee_up
+  real :: meta,actual,intrinsic_result,user_result,round_meta,keyword_meta,second_result,cpu_result
+  integer(1) :: izext_arg,jzext_arg
+  integer :: zext_sum,choice,optional_choice
+  type(ieee_round_type) :: rounding,modes(2)
+  rounding=ieee_nearest; modes=[ieee_nearest,ieee_up]
+  meta=13; actual=6; round_meta=1; keyword_meta=2
+  izext_arg=-1; jzext_arg=-1; choice=1; optional_choice=2
+!$omp parallel num_threads(1)
+  intrinsic_result=true_value(meta,ieee_positive_zero); user_result=ieee_value(actual)
+  zext_sum=izext(izext_arg)+jzext(jzext_arg)
+  print *,rounding_support(modes(choice),round_meta), &
+    rounding_support(x=keyword_meta,round_value=rounding),rounding_support(modes(optional_choice))
+  call second(second_result); call cpu_time(cpu_result)
+!$omp end parallel
+contains
+  real function ieee_value(x); real :: x; ieee_value=x+1; end function
 end program

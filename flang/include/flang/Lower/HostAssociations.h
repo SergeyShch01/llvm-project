@@ -11,7 +11,6 @@
 
 #include "mlir/IR/Types.h"
 #include "llvm/ADT/ArrayRef.h"
-#include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include <optional>
@@ -26,8 +25,9 @@ namespace lower {
 class AbstractConverter;
 class SymMap;
 namespace pft {
+struct Program;
 struct Variable;
-}
+} // namespace pft
 
 /// Internal procedures in Fortran may access variables declared in the host
 /// procedure directly. We bundle these variables together in a tuple and pass
@@ -41,14 +41,15 @@ public:
   /// an extra tuple argument.
   bool hasTupleAssociations() const { return !tupleSymbols.empty(); }
 
-  /// Adds a set of Symbols that will be the host associated bindings for this
-  /// host procedure. getVariables is invoked synchronously only for newly
-  /// promoted globals and must return Program's finalized, stable records.
+  /// Classify host variables as globals or tuple entries using Program.
+  /// Cached variable records are owned by Program.
   void addSymbolsToBind(
       const llvm::SetVector<const Fortran::semantics::Symbol *> &symbols,
-      const Fortran::semantics::Scope &hostScope,
-      llvm::function_ref<llvm::ArrayRef<pft::Variable>()> getVariables);
+      const Fortran::semantics::Scope &hostScope, pft::Program &program);
 
+  /// Return cached MAIN variables when a captured scalar is selected for static
+  /// storage, or std::nullopt otherwise. Program owns the list and must outlive
+  /// the returned view.
   std::optional<llvm::ArrayRef<pft::Variable>> getVariables() const {
     return variables;
   }
@@ -81,12 +82,10 @@ private:
   /// Canonical vector of host associated global symbols.
   llvm::SetVector<const Fortran::semantics::Symbol *> globalSymbols;
 
-  /// Ordered bindings selected once when newly promoted globals occur.
-  /// These records borrow Program's cached variable list; std::map nodes and
-  /// finalized variable lists remain stable through all child bindings.
+  /// Ordered records for captured globals and the storage backing their
+  /// aliases. The records refer to Program's cached lists and remain valid
+  /// until it is destroyed.
   llvm::SmallVector<const pft::Variable *> globalBindings;
-  /// Whole-scope records reused by the host's own lowering as well. Disengaged
-  /// when no newly promoted globals occur, preserving the legacy path.
   std::optional<llvm::ArrayRef<pft::Variable>> variables;
 
   /// The type of the extra argument to be added to each internal procedure.

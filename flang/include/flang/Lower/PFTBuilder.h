@@ -26,6 +26,7 @@
 #include "flang/Semantics/scope.h"
 #include "flang/Semantics/semantics.h"
 #include "flang/Semantics/symbol.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
@@ -654,22 +655,15 @@ using VariableList = std::vector<Variable>;
 using ScopeVariableListMap =
     std::map<const Fortran::semantics::Scope *, VariableList>;
 
-/// Find or create an ordered list of the equivalence sets and variables that
-/// appear in \p scope. The result is cached in \p map.
-const VariableList &getScopeVariableList(const Fortran::semantics::Scope &scope,
-                                         ScopeVariableListMap &map);
-
 /// Create an ordered list of the equivalence sets and variables that appear in
 /// \p scope. The result is not cached.
-VariableList getScopeVariableList(const Fortran::semantics::Scope &scope);
+VariableList getScopeVariableList(const Fortran::semantics::Scope &scope,
+                                  const Program &program);
 
 /// Create an ordered list of the equivalence sets and variables that \p symbol
 /// depends on. \p symbol itself will be the last variable in the list.
-VariableList getDependentVariableList(const Fortran::semantics::Symbol &);
-
-/// Return the enclosing Program's stable variable-list cache.
-template <typename A>
-ScopeVariableListMap &getScopeVariableListMap(A &node);
+VariableList getDependentVariableList(const Fortran::semantics::Symbol &,
+                                      const Program &program);
 
 struct FunctionLikeUnit;
 /// Create an ordered list of equivalence sets and variables from host
@@ -752,14 +746,10 @@ struct FunctionLikeUnit : public ProgramUnit {
   // Host associations
   //===--------------------------------------------------------------------===//
 
+  /// Classify captures using the enclosing Program's finalized storage
+  /// selection.
   void setHostAssociatedSymbols(
-      const llvm::SetVector<const semantics::Symbol *> &symbols) {
-    hostAssociations.addSymbolsToBind(
-        symbols, getScope(), [&]() -> const VariableList & {
-          return getScopeVariableList(getScope(),
-                                      getScopeVariableListMap(*this));
-        });
-  }
+      const llvm::SetVector<const semantics::Symbol *> &symbols);
 
   /// Return the host associations, if any, from the parent (host) procedure.
   /// Crashes if the parent is not a procedure.
@@ -898,9 +888,23 @@ struct Program {
   const semantics::CommonBlockList &getCommonBlocks() const {
     return commonBlocks;
   }
-  ScopeVariableListMap &getScopeVariableListMap() {
-    return scopeVariableListMap;
+  /// Store the selected MAIN globals before constructing any variable lists.
+  /// The selection remains unchanged throughout lowering.
+  void setMainGlobals(llvm::DenseSet<const semantics::Symbol *> &&globals) {
+    assert(scopeVariableListMap.empty() &&
+           "storage selection must precede variable-list construction");
+    mainGlobals = std::move(globals);
   }
+
+  /// True if a symbol returned by Symbol::GetUltimate() was selected for
+  /// static MAIN storage.
+  bool isMainGlobal(const semantics::Symbol &ultimate) const {
+    return mainGlobals.contains(&ultimate);
+  }
+
+  /// Cache ordered variable records for this storage selection. They remain
+  /// valid until this Program is destroyed.
+  const VariableList &getScopeVariableList(const semantics::Scope &scope);
 
   /// LLVM dump method on a Program.
   LLVM_DUMP_METHOD void dump() const;
@@ -908,7 +912,9 @@ struct Program {
 private:
   std::list<Units> units;
   semantics::CommonBlockList commonBlocks;
-  /// Module/submodule scopes and MAIN hosts with newly promoted globals.
+  /// MAIN scalars chosen for static storage. Their symbols outlive the PFT.
+  llvm::DenseSet<const semantics::Symbol *> mainGlobals;
+  /// Variable records for module scopes and MAIN hosts with selected globals.
   ScopeVariableListMap scopeVariableListMap;
 };
 
@@ -927,14 +933,6 @@ ParentType *getAncestor(A &node) {
   return node.parent.visit(common::visitors{
       [](Program &p) -> ParentType * { return nullptr; },
       [](auto &p) -> ParentType * { return getAncestor<ParentType>(p); }});
-}
-
-/// Get the "global" scopeVariableListMap, stored in the pft root node.
-template <typename A>
-ScopeVariableListMap &getScopeVariableListMap(A &node) {
-  Program *pftRoot = getAncestor<Program>(node);
-  assert(pftRoot && "pft must have a root");
-  return pftRoot->getScopeVariableListMap();
 }
 
 /// Call the provided \p callBack on all symbols that are referenced inside \p

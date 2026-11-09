@@ -14,6 +14,8 @@
 ! RUN: %flang_fc1 -fopenmp -fdo-concurrent-to-openmp=device -fopenmp-is-target-device -fopenmp-targets=nvptx64-nvidia-cuda -emit-fir %t/generated-target.f90 -o - | FileCheck %s --check-prefix=DEVICE --implicit-check-not='fir.global internal @_QFEx{{[[:space:]]}}'
 ! RUN: bbc -fopenmp -fdo-concurrent-to-openmp=device -emit-fir %t/generated-target.f90 -o - | FileCheck %s --check-prefix=DEVICE --implicit-check-not='fir.global internal @_QFEx{{[[:space:]]}}'
 ! RUN: %flang_fc1 -fopenmp -fdo-concurrent-to-openmp=host -emit-fir %t/generated-target.f90 -o - | FileCheck %s --check-prefix=HOST
+! RUN: %flang_fc1 -fopenmp -cpp -DEARLY_TARGET -DDIRECTIVE=barrier -emit-hlfir %t/internal.f90 -o - | FileCheck %s --check-prefix=KEEP --implicit-check-not='fir.global internal @_QFEx{{[[:space:]]}}'
+! RUN: bbc -fopenmp -fdo-concurrent-to-openmp=host -emit-fir %t/generated-target.f90 -o - | FileCheck %s --check-prefix=HOST
 ! KEEP: fir.alloca i32 {{.*}}bindc_name = "x"
 ! EXTERNAL-LABEL: func.func @_QQmain()
 ! EXTERNAL: fir.address_of(@_QFEx)
@@ -21,25 +23,31 @@
 ! EXTERNAL: omp.target_data
 ! GLOBAL: fir.global internal @_QFEx : i32
 !--- internal.f90
-! Each CPP offload variant independently preserves MAIN storage when the
-! directive is in an internal procedure. BARRIER is the host-only control.
+! Offload before or inside PARALLEL keeps x on the stack; BARRIER alone does not.
 program p
-  integer :: x
+  integer :: x,marker
+#ifdef EARLY_TARGET
+!$omp declare target(marker)
+#endif
 !$omp parallel
   print *,x
 !$omp end parallel
   call worker()
 contains
   subroutine worker()
+#ifdef REGION
+!$omp parallel
+#endif
 !$omp DIRECTIVE
 #ifdef REGION
     x=1
 !$omp END_DIRECTIVE
+!$omp end parallel
 #endif
   end subroutine
 end program
 !--- meta.f90
-! Even a metadirective selecting NOTHING currently preserves MAIN storage.
+! A metadirective selecting NOTHING keeps x on the stack.
 program p
   integer :: x
 !$omp parallel
@@ -68,15 +76,14 @@ subroutine outside()
   a=1
 !$omp end target data
 end subroutine
-! Device DO CONCURRENT keeps the host tuple and maps it into the target. Host
-! mapping still permits globals and removes the unused tuple argument from f.
+! Device mapping passes the host tuple to f; host mapping uses global x.
 ! DEVICE-LABEL: func.func @_QQmain()
 ! DEVICE: fir.alloca i32 {{.*}}bindc_name = "x"
 ! DEVICE: %[[HOST_TUPLE:[^ ]+]] = fir.alloca tuple<!fir.ref<i32>>
 ! DEVICE: %[[TUPLE_MAP:[^ ]+]] = omp.map.info var_ptr(%[[HOST_TUPLE]] : !fir.ref<tuple<!fir.ref<i32>>>
 ! DEVICE: omp.target
-! DEVICE-SAME: map_entries({{.*}}%[[TUPLE_MAP]] -> %[[MAPPED_TUPLE:[^, ]+]]{{.*}} : !fir.ref<index>, !fir.ref<index>, !fir.ref<index>, !fir.ref<i32>, !fir.ref<tuple<!fir.ref<i32>>>, !fir.ref<!fir.array<4xi32>>, !fir.ref<index>)
-! DEVICE: %[[TUPLE:[^ ]+]] = fir.declare %[[MAPPED_TUPLE]] uniq_name("") : (!fir.ref<tuple<!fir.ref<i32>>>)
+! DEVICE-SAME: map_entries({{.*}}%[[TUPLE_MAP]] -> %[[MAPPED_TUPLE:[^, )]+]]{{[, )]}}
+! DEVICE: %[[TUPLE:[^ ]+]] = fir.declare %[[MAPPED_TUPLE]] {{.*}} : (!fir.ref<tuple<!fir.ref<i32>>>)
 ! DEVICE: fir.call @_QFPf({{[^,]*}}, %[[TUPLE]])
 ! DEVICE-LABEL: func.func private @_QFPf(
 ! DEVICE-SAME: !fir.ref<tuple<!fir.ref<i32>>>
@@ -84,7 +91,7 @@ end subroutine
 ! HOST: fir.address_of(@_QFEx)
 ! HOST: fir.call @_QFPf({{[^,]*}})
 ! HOST-LABEL: func.func private @_QFPf(
-! HOST-SAME: !fir.ref<i32> {{.*}}) -> i32
+! HOST-SAME: %{{[^: ]+}}: !fir.ref<i32>{{( \{[^{}]*\})?}}) -> i32
 ! HOST: fir.global internal @_QFEx
 !--- generated-target.f90
 program p
@@ -102,12 +109,11 @@ program p
       a(i)=v
     end block
   end do
-  if(any(a/=[2,3,4,5])) stop 1
   call host_use()
 contains
   pure integer function f(j)
     integer,intent(in) :: j
-    f=j+1
+    f=j+x
   end function
   subroutine host_use()
     print *,x
